@@ -9,6 +9,7 @@ How to decide who handles what.
 | Web app and portal UX | Maleficent | Sign-in flow, tenant picker, capacity dropdown, workspace create/select UI, provisioning pages |
 | Fabric platform and identity | Scar | Workspace creation, capacity assignment, Spark environment publish, Entra app wiring, deployment diagnostics |
 | Data pipelines and notebooks | Ursula | Purview extraction, Unified Catalog mapping, transform/load logic, data model outputs |
+| Power BI model and reports | Jafar | Semantic model tables, DAX measures, relationships, dashboard visuals, refresh and sharing setup |
 | GitHub operations | Hades | Frequent commits, checkpoint pushes, branch hygiene, release commit discipline |
 | Code review | Hades | Review PRs, check quality, enforce commit and branch standards |
 | Testing | Cruella | Write tests, find edge cases, verify notebook and API flows |

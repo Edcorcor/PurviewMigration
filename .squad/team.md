@@ -17,6 +17,7 @@
 | Ursula | Data Engineer | Owns Purview/Fabric extraction notebooks, schema normalization, and metadata quality checks for migration readiness. | Active |
 | Scar | Fabric Platform Engineer | Owns Fabric workspace/capacity setup, Spark environment publishing, identity/app registration wiring, and deployment reliability. | Active |
 | Cruella | QA and Test Engineer | Owns test plans, edge-case validation, notebook execution checks, and release confidence gates. | Active |
+| Jafar | Power BI Developer | Owns semantic model design, DAX measures, report UX, refresh setup, and stakeholder-facing governance dashboards. | Active |
 
 ## Project Context
 
