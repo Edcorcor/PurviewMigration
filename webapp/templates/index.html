@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fabric Provisioning Portal</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="orb orb-a"></div>
+  <div class="orb orb-b"></div>
+
+  <main class="container">
+    <section class="hero">
+      <h1>Fabric Provisioning Portal</h1>
+      <p>Sign in once, detect your tenant, select capacity, choose or create workspace, and provision notebook plus Spark environment.</p>
+    </section>
+
+    {% if not signed_in %}
+      <section class="card login-card">
+        <h2>Step 1: Sign In</h2>
+        <p>Use Microsoft Entra sign-in with Fabric scopes.</p>
+        <a class="button" href="/auth/login">Sign in with Microsoft</a>
+      </section>
+    {% else %}
+      <section class="card identity-card">
+        <div class="row split">
+          <div>
+            <h2>Signed In</h2>
+            <p><strong>User:</strong> {{ tenant.user_name }}</p>
+            <p><strong>UPN:</strong> {{ tenant.upn }}</p>
+            <p><strong>Tenant:</strong> {{ tenant.tenant_id }}</p>
+          </div>
+          <div class="align-right">
+            <a class="button secondary" href="/auth/logout">Sign out</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="provision-card">
+        <h2>Step 2: Provision Fabric Assets</h2>
+
+        <form id="provision-form">
+          <div class="field-group">
+            <label>Workspace Mode</label>
+            <div class="inline-options">
+              <label><input type="radio" name="workspace_mode" value="existing" checked /> Use Existing</label>
+              <label><input type="radio" name="workspace_mode" value="create" /> Create New</label>
+            </div>
+          </div>
+
+          <div class="field-group" id="existing-workspace-group">
+            <label for="workspace_id">Workspace</label>
+            <select id="workspace_id" name="workspace_id"></select>
+          </div>
+
+          <div id="create-workspace-group" class="hidden">
+            <div class="field-group">
+              <label for="workspace_name">Workspace Name</label>
+              <input id="workspace_name" name="workspace_name" value="{{ workspace_name_default }}" />
+            </div>
+
+            <div class="field-group">
+              <label for="capacity_id">Capacity</label>
+              <select id="capacity_id" name="capacity_id">
+                <option value="">No explicit capacity</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field-group">
+              <label for="environment_name">Spark Environment Name</label>
+              <input id="environment_name" name="environment_name" value="{{ environment_name_default }}" />
+            </div>
+            <div class="field-group">
+              <label for="notebook_name">Notebook Name</label>
+              <input id="notebook_name" name="notebook_name" value="{{ notebook_name_default }}" />
+            </div>
+          </div>
+
+          <button class="button" type="submit">Provision Workspace + Environment + Notebook</button>
+        </form>
+
+        <pre id="status" class="status"></pre>
+      </section>
+    {% endif %}
+  </main>
+
+  {% if signed_in %}
+    <script src="/static/app.js"></script>
+  {% endif %}
+</body>
+</html>

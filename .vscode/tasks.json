@@ -2,6 +2,23 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Webapp: run portal",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "uvicorn",
+        "webapp.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
       "label": "Git: checkpoint commit",
       "type": "shell",
       "command": "powershell",
