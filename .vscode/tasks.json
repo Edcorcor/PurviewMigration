@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Git: checkpoint commit",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/git_checkpoint.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Git: checkpoint commit and push",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/git_checkpoint.ps1",
+        "-Push"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

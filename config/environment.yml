@@ -1,0 +1,48 @@
+# Environment Configuration for Purview Audit
+# This file is environment-agnostic. Set actual values via Azure Key Vault or environment variables
+
+# Azure Authentication
+azure:
+  tenant_id: "${AZURE_TENANT_ID}"
+  subscription_id: "${AZURE_SUBSCRIPTION_ID}"
+  
+# Purview Configuration
+purview:
+  # Leave empty to auto-discover; can specify explicit account names
+  account_names: []  # e.g., ["purview-prod", "purview-test"]
+  auto_discover: true
+  
+# Unified Catalog (Microsoft Fabric)
+unified_catalog:
+  enabled: true
+  
+# Fabric Workspace
+fabric:
+  workspace_name: "PurviewAuditWorkspace"
+  workspace_id: "${FABRIC_WORKSPACE_ID}"  # Will be auto-created if not provided
+  capacity_id: "${FABRIC_CAPACITY_ID}"
+  environment_name: "${FABRIC_ENVIRONMENT_NAME}"
+  notebook_name: "${FABRIC_NOTEBOOK_NAME}"
+  public_client_id: "${FABRIC_PUBLIC_CLIENT_ID}"
+  
+# Key Vault Configuration
+key_vault:
+  vault_name: "${KEY_VAULT_NAME}"
+  check_fabric_connection: true
+  
+# Spark Configuration
+spark:
+  app_name: "PurviewAuditSpark"
+  memory: "4g"
+  cores: 4
+  
+# Output Configuration
+output:
+  data_format: "parquet"
+  overwrite: true
+  destination: "fabric"  # or "local" or "adls"
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "json"
