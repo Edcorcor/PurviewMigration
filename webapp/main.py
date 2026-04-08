@@ -1,7 +1,9 @@
 import os
+import json
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import logging
 
 import requests
 from dotenv import load_dotenv
@@ -13,28 +15,61 @@ from msal import ConfidentialClientApplication
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from scripts.fabric_publish import (
-    FabricClient,
-    build_environment_definition,
-    build_notebook_definition,
-)
-
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env", override=False)
 logger = logging.getLogger(__name__)
 
-NOTEBOOK_PATH = ROOT / "notebooks" / "00-Setup.ipynb"
-ENV_FILE = ROOT / "fabric" / "environment.yml"
-SPARK_SETTINGS_FILE = ROOT / "fabric" / "Sparkcompute.yml"
-
-FABRIC_SCOPES = [
-    "https://api.fabric.microsoft.com/Workspace.ReadWrite.All",
-    "https://api.fabric.microsoft.com/Item.ReadWrite.All",
-    "https://api.fabric.microsoft.com/Environment.ReadWrite.All",
-    "https://api.powerbi.com/Capacity.Read.All",
+ARM_SCOPE = "https://management.azure.com/user_impersonation"
+AUTH_SCOPES = [
+    ARM_SCOPE,
     "openid",
     "profile",
     "offline_access",
+]
+
+STEP_DEFINITIONS = [
+    {
+        "id": "step-1-setup",
+        "title": "Run Setup and Discovery",
+        "notebook": "00-Setup.ipynb",
+        "artifact": ROOT / "data" / "raw" / "setup_audit_config.json",
+        "description": "Authenticate, discover Purview instances, and persist setup configuration.",
+    },
+    {
+        "id": "step-2-purview-extract",
+        "title": "Run Purview Extraction",
+        "notebook": "01-Purview-Extract.ipynb",
+        "artifact": ROOT / "data" / "raw" / "purview_extraction.json",
+        "description": "Extract collections, sources, assets, scans, classifications, and runtimes.",
+    },
+    {
+        "id": "step-3-catalog-extract",
+        "title": "Run Unified Catalog Extraction",
+        "notebook": "02-UnifiedCatalog-Extract.ipynb",
+        "artifact": ROOT / "data" / "raw" / "unified_catalog_extraction.json",
+        "description": "Extract data products, catalog assets, domains, and quality scores.",
+    },
+    {
+        "id": "step-4-transform",
+        "title": "Run Transform and Normalize",
+        "notebook": "03-Transform-Data.ipynb",
+        "artifact": ROOT / "data" / "reports" / "transform_summary.json",
+        "description": "Generate curated dimensions, facts, and relationship graph outputs.",
+    },
+    {
+        "id": "step-5-keyvault-validation",
+        "title": "Run Key Vault Validation",
+        "notebook": "04-KeyVault-Validation.ipynb",
+        "artifact": ROOT / "data" / "reports" / "key_vault_connectivity.json",
+        "description": "Validate vault access and record remediation guidance.",
+    },
+    {
+        "id": "step-6-load",
+        "title": "Run Final Load",
+        "notebook": "05-Load-Fabric.ipynb",
+        "artifact": ROOT / "data" / "reports" / "load_manifest.json",
+        "description": "Publish curated datasets and generate reporting manifests.",
+    },
 ]
 
 app = FastAPI(title="Purview Fabric Provisioning")
@@ -42,17 +77,11 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("WEBAPP_SESSION_SECRE
 app.mount("/static", StaticFiles(directory=ROOT / "webapp" / "static"), name="static")
 templates = Jinja2Templates(directory=str(ROOT / "webapp" / "templates"))
 
-
-class ProvisionRequest(BaseModel):
-    workspace_mode: str
-    workspace_id: Optional[str] = None
-    workspace_name: Optional[str] = None
-    workspace_description: Optional[str] = "Purview governance audit workspace"
-    capacity_id: Optional[str] = None
-    environment_name: Optional[str] = "PurviewAuditSpark"
-    environment_description: Optional[str] = "Spark environment for Purview governance audit notebooks"
-    notebook_name: Optional[str] = "00-Setup"
-    notebook_description: Optional[str] = "Purview governance setup and discovery notebook"
+class StepRunRequest(BaseModel):
+    step_id: str
+    subscription_id: str
+    key_vault_id: str
+    key_vault_name: str
 
 
 def _required_env(name: str) -> str:
@@ -89,6 +118,13 @@ def _access_token(request: Request) -> str:
     return token
 
 
+def _headers(token: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+
 def _tenant_summary(claims: Dict[str, Any]) -> Dict[str, str]:
     return {
         "tenant_id": claims.get("tid", ""),
@@ -97,17 +133,82 @@ def _tenant_summary(claims: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def _list_capacities(token: str) -> List[Dict[str, Any]]:
-    headers = {"Authorization": f"Bearer {token}"}
+def _list_subscriptions(token: str) -> List[Dict[str, Any]]:
     try:
-        response = requests.get("https://api.powerbi.com/v1.0/myorg/capacities", headers=headers, timeout=30)
+        response = requests.get(
+            "https://management.azure.com/subscriptions?api-version=2020-01-01",
+            headers=_headers(token),
+            timeout=30,
+        )
         if response.status_code == 200:
             payload = response.json()
             return payload.get("value", [])
-        logger.warning("Capacity lookup returned %s: %s", response.status_code, response.text)
+        logger.warning("Subscription lookup returned %s: %s", response.status_code, response.text)
     except requests.RequestException as exc:
-        logger.warning("Capacity lookup failed: %s", exc)
+        logger.warning("Subscription lookup failed: %s", exc)
     return []
+
+
+def _list_key_vaults(token: str, subscription_ids: List[str]) -> List[Dict[str, Any]]:
+    all_vaults: List[Dict[str, Any]] = []
+    for subscription_id in subscription_ids:
+        try:
+            response = requests.get(
+                f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.KeyVault/vaults?api-version=2023-07-01",
+                headers=_headers(token),
+                timeout=30,
+            )
+            if response.status_code == 200:
+                for vault in response.json().get("value", []):
+                    props = vault.get("properties", {})
+                    all_vaults.append(
+                        {
+                            "id": vault.get("id", ""),
+                            "name": vault.get("name", ""),
+                            "subscription_id": subscription_id,
+                            "resource_group": (vault.get("id", "").split("/")[4] if "/resourceGroups/" in vault.get("id", "") else ""),
+                            "location": vault.get("location", ""),
+                            "vault_uri": props.get("vaultUri", ""),
+                        }
+                    )
+            else:
+                logger.warning("Key Vault lookup failed for %s: %s %s", subscription_id, response.status_code, response.text)
+        except requests.RequestException as exc:
+            logger.warning("Key Vault lookup request failed for %s: %s", subscription_id, exc)
+    return all_vaults
+
+
+def _artifact_status(path: Path) -> Dict[str, Any]:
+    return {
+        "exists": path.exists(),
+        "path": str(path),
+        "last_modified": path.stat().st_mtime if path.exists() else None,
+    }
+
+
+def _step_payload(step: Dict[str, Any]) -> Dict[str, Any]:
+    artifact = _artifact_status(step["artifact"])
+    return {
+        "id": step["id"],
+        "title": step["title"],
+        "description": step["description"],
+        "notebook": step["notebook"],
+        "artifact": artifact,
+        "status": "COMPLETE" if artifact["exists"] else "PENDING",
+        "prompt": f"Run {step['notebook']} and come back to mark this step complete.",
+    }
+
+
+def _run_plan_path() -> Path:
+    reports_dir = ROOT / "data" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    return reports_dir / "webapp_run_plan.json"
+
+
+def _write_run_plan(payload: Dict[str, Any]) -> None:
+    plan_path = _run_plan_path()
+    with plan_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
 
 
 @app.get("/")
@@ -130,7 +231,7 @@ def home(request: Request):
 def auth_login(request: Request):
     msal_app = _build_msal_app()
     flow = msal_app.initiate_auth_code_flow(
-        scopes=FABRIC_SCOPES,
+        scopes=AUTH_SCOPES,
         redirect_uri=_redirect_uri(request),
     )
     request.session["auth_flow"] = flow
@@ -166,108 +267,71 @@ def api_context(request: Request):
     tenant = _tenant_summary(request.session.get("user_claims", {}))
 
     try:
-        fabric = FabricClient(token)
-        workspaces = fabric.list_all_workspaces()
-        capacities = _list_capacities(token)
+        subscriptions = _list_subscriptions(token)
+        subscription_ids = [sub.get("subscriptionId") for sub in subscriptions if sub.get("subscriptionId")]
+        key_vaults = _list_key_vaults(token, subscription_ids)
+        steps = [_step_payload(step) for step in STEP_DEFINITIONS]
     except Exception as exc:
-        logger.exception("Failed to load portal context")
-        raise HTTPException(status_code=502, detail=f"Could not load Fabric context: {exc}") from exc
+        logger.exception("Failed to load Azure context")
+        raise HTTPException(status_code=502, detail=f"Could not load Azure context: {exc}") from exc
 
     return JSONResponse(
         {
             "tenant": tenant,
-            "workspaces": workspaces,
-            "capacities": capacities,
+            "subscriptions": subscriptions,
+            "key_vaults": key_vaults,
+            "steps": steps,
             "summary": {
-                "workspace_count": len(workspaces),
-                "capacity_count": len(capacities),
+                "subscription_count": len(subscriptions),
+                "key_vault_count": len(key_vaults),
             },
         }
     )
 
 
-@app.post("/api/provision")
-def api_provision(request: Request, payload: ProvisionRequest):
-    token = _access_token(request)
-    fabric = FabricClient(token)
+@app.get("/api/steps")
+def api_steps() -> JSONResponse:
+    return JSONResponse({"steps": [_step_payload(step) for step in STEP_DEFINITIONS]})
 
-    try:
-        workspace: Optional[Dict[str, Any]] = None
-        if payload.workspace_mode == "existing":
-            if not payload.workspace_id:
-                raise HTTPException(status_code=400, detail="workspace_id is required when selecting existing workspace.")
-            workspace = {"id": payload.workspace_id, "displayName": "Existing Workspace"}
-        elif payload.workspace_mode == "create":
-            if not payload.workspace_name:
-                raise HTTPException(status_code=400, detail="workspace_name is required for workspace creation.")
-            existing = fabric.find_workspace_by_name(payload.workspace_name)
-            workspace = existing or fabric.create_workspace(
-                payload.workspace_name,
-                payload.workspace_description or "Purview governance audit workspace",
-                capacity_id=payload.capacity_id,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="workspace_mode must be either 'existing' or 'create'.")
 
-        workspace_id = workspace["id"]
+@app.post("/api/steps/run")
+def api_steps_run(request: Request, payload: StepRunRequest):
+    _access_token(request)
 
-        environment_name = payload.environment_name or "PurviewAuditSpark"
-        existing_environment = fabric.find_item_by_name(workspace_id, "Environment", environment_name)
-        if existing_environment:
-            environment = existing_environment
-        else:
-            environment_def = build_environment_definition(
-                ENV_FILE,
-                SPARK_SETTINGS_FILE,
-                environment_name,
-                payload.environment_description or "Spark environment for Purview governance audit notebooks",
-            )
-            environment = fabric.create_environment(
-                workspace_id,
-                environment_name,
-                payload.environment_description or "Spark environment for Purview governance audit notebooks",
-                environment_def,
-            )
+    step = next((item for item in STEP_DEFINITIONS if item["id"] == payload.step_id), None)
+    if step is None:
+        raise HTTPException(status_code=400, detail=f"Unknown step_id: {payload.step_id}")
 
-        publish_result: Dict[str, Any] = {}
-        if environment.get("id"):
-            publish_result = fabric.publish_environment(workspace_id, environment["id"])
+    if not payload.subscription_id:
+        raise HTTPException(status_code=400, detail="subscription_id is required.")
+    if not payload.key_vault_id or not payload.key_vault_name:
+        raise HTTPException(status_code=400, detail="key_vault selection is required.")
 
-        notebook_name = payload.notebook_name or "00-Setup"
-        existing_notebook = fabric.find_item_by_name(workspace_id, "Notebook", notebook_name)
-        if existing_notebook:
-            notebook = existing_notebook
-        else:
-            notebook_def = build_notebook_definition(
-                NOTEBOOK_PATH,
-                notebook_name,
-                payload.notebook_description or "Purview governance setup and discovery notebook",
-            )
-            notebook = fabric.create_notebook(
-                workspace_id,
-                notebook_name,
-                payload.notebook_description or "Purview governance setup and discovery notebook",
-                notebook_def,
-            )
+    artifact = _artifact_status(step["artifact"])
+    run_plan = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "tenant": _tenant_summary(request.session.get("user_claims", {})),
+        "selected_subscription_id": payload.subscription_id,
+        "selected_key_vault": {
+            "id": payload.key_vault_id,
+            "name": payload.key_vault_name,
+        },
+        "current_step": {
+            "id": step["id"],
+            "title": step["title"],
+            "notebook": step["notebook"],
+            "artifact": artifact,
+        },
+        "steps": [_step_payload(item) for item in STEP_DEFINITIONS],
+    }
+    _write_run_plan(run_plan)
 
-        return JSONResponse(
-            {
-                "workspace": workspace,
-                "environment": environment,
-                "environment_publish": publish_result,
-                "notebook": notebook,
-                "message": "Provisioning complete.",
-            }
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Provisioning failed")
-        return JSONResponse(
-            {
-                "message": "Provisioning failed.",
-                "error": str(exc),
-                "workspace_mode": payload.workspace_mode,
-            },
-            status_code=502,
-        )
+    status = "COMPLETE" if artifact["exists"] else "WAITING_FOR_NOTEBOOK_RUN"
+    return JSONResponse(
+        {
+            "status": status,
+            "step": _step_payload(step),
+            "prompt": f"Open and run {step['notebook']} now. After it completes, click Run Step again to refresh status.",
+            "run_plan_path": str(_run_plan_path()),
+        }
+    )

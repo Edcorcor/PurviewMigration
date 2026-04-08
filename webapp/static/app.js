@@ -1,50 +1,62 @@
+let cachedContext = null;
+
 async function loadContext() {
   const response = await fetch('/api/context');
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || 'Could not load Fabric context.');
+    throw new Error(payload.detail || 'Could not load Azure context.');
   }
   return response.json();
 }
 
 function setBusy(isBusy) {
-  const submitButton = document.getElementById('submit-button');
+  const submitButton = document.getElementById('save-selection-button');
   const refreshButton = document.getElementById('refresh-context');
   if (submitButton) {
     submitButton.disabled = isBusy;
-    submitButton.textContent = isBusy ? 'Provisioning...' : 'Provision Workspace + Environment + Notebook';
+    submitButton.textContent = isBusy ? 'Saving...' : 'Save Selection';
   }
   if (refreshButton) {
     refreshButton.disabled = isBusy;
   }
 }
 
-function populateWorkspaces(workspaces) {
-  const select = document.getElementById('workspace_id');
+function populateSubscriptions(subscriptions) {
+  const select = document.getElementById('subscription_id');
   select.innerHTML = '';
-  if (!workspaces || workspaces.length === 0) {
+  if (!subscriptions || subscriptions.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'No workspaces found';
+    opt.textContent = 'No subscriptions found';
     select.appendChild(opt);
     return;
   }
 
-  for (const ws of workspaces) {
+  for (const sub of subscriptions) {
     const opt = document.createElement('option');
-    opt.value = ws.id;
-    opt.textContent = `${ws.displayName} (${ws.type || 'Workspace'})`;
+    opt.value = sub.subscriptionId;
+    opt.textContent = `${sub.displayName} (${sub.subscriptionId})`;
     select.appendChild(opt);
   }
 }
 
-function populateCapacities(capacities) {
-  const select = document.getElementById('capacity_id');
-  select.innerHTML = '<option value="">No explicit capacity</option>';
-  for (const c of capacities || []) {
+function populateKeyVaults(keyVaults) {
+  const select = document.getElementById('key_vault_id');
+  select.innerHTML = '';
+  if (!keyVaults || keyVaults.length === 0) {
     const opt = document.createElement('option');
-    opt.value = c.id || '';
-    opt.textContent = c.displayName || c.id;
+    opt.value = '';
+    opt.textContent = 'No key vaults found';
+    select.appendChild(opt);
+    return;
+  }
+
+  for (const vault of keyVaults) {
+    const opt = document.createElement('option');
+    opt.value = vault.id || '';
+    opt.textContent = `${vault.name} [${vault.subscription_id}]`;
+    opt.dataset.vaultName = vault.name || '';
+    opt.dataset.subscriptionId = vault.subscription_id || '';
     select.appendChild(opt);
   }
 }
@@ -56,7 +68,7 @@ function setContextSummary(context) {
   }
 
   const summary = context.summary || {};
-  el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.workspace_count || 0} workspace(s) | ${summary.capacity_count || 0} capacity option(s)`;
+  el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.subscription_count || 0} subscription(s) | ${summary.key_vault_count || 0} key vault(s)`;
 }
 
 function setStatus(message, payload) {
@@ -65,41 +77,76 @@ function setStatus(message, payload) {
   el.textContent = `${message}${body}`;
 }
 
-function wireWorkspaceModeToggle() {
-  const existingGroup = document.getElementById('existing-workspace-group');
-  const createGroup = document.getElementById('create-workspace-group');
+function renderSteps(steps) {
+  const container = document.getElementById('steps-list');
+  container.innerHTML = '';
 
-  document.querySelectorAll('input[name="workspace_mode"]').forEach((input) => {
-    input.addEventListener('change', () => {
-      if (input.value === 'create' && input.checked) {
-        existingGroup.classList.add('hidden');
-        createGroup.classList.remove('hidden');
-      } else if (input.value === 'existing' && input.checked) {
-        createGroup.classList.add('hidden');
-        existingGroup.classList.remove('hidden');
-      }
-    });
-  });
+  for (const step of steps || []) {
+    const row = document.createElement('div');
+    row.className = 'step-row';
+
+    const info = document.createElement('div');
+    info.className = 'step-info';
+    info.innerHTML = `
+      <h3>${step.title}</h3>
+      <p>${step.description}</p>
+      <p><strong>Notebook:</strong> ${step.notebook}</p>
+      <p><strong>Status:</strong> ${step.status}</p>
+    `;
+
+    const action = document.createElement('div');
+    action.className = 'step-action';
+    const button = document.createElement('button');
+    button.className = 'button secondary';
+    button.type = 'button';
+    button.textContent = 'Run Step';
+    button.addEventListener('click', () => runStep(step.id));
+    action.appendChild(button);
+
+    row.appendChild(info);
+    row.appendChild(action);
+    container.appendChild(row);
+  }
 }
 
-async function handleProvisionSubmit(event) {
-  event.preventDefault();
+function getSelection() {
+  const subscriptionId = document.getElementById('subscription_id').value;
+  const vaultSelect = document.getElementById('key_vault_id');
+  const vaultOption = vaultSelect.options[vaultSelect.selectedIndex];
 
-  const mode = document.querySelector('input[name="workspace_mode"]:checked').value;
+  return {
+    subscription_id: subscriptionId,
+    key_vault_id: vaultSelect.value || '',
+    key_vault_name: vaultOption?.dataset.vaultName || ''
+  };
+}
+
+async function runStep(stepId) {
+  const selection = getSelection();
+  if (!selection.subscription_id) {
+    setStatus('Choose a subscription before running a step.');
+    return;
+  }
+  if (!selection.key_vault_id) {
+    setStatus('Choose a key vault before running a step.');
+    return;
+  }
+
+  const proceed = window.confirm(`Run ${stepId}? You will be prompted to execute the matching notebook step.`);
+  if (!proceed) {
+    return;
+  }
+
   const payload = {
-    workspace_mode: mode,
-    workspace_id: document.getElementById('workspace_id').value || null,
-    workspace_name: document.getElementById('workspace_name').value || null,
-    capacity_id: document.getElementById('capacity_id').value || null,
-    environment_name: document.getElementById('environment_name').value || 'PurviewAuditSpark',
-    notebook_name: document.getElementById('notebook_name').value || '00-Setup'
+    step_id: stepId,
+    ...selection
   };
 
   setBusy(true);
-  setStatus('Provisioning in progress. This can take a few minutes...');
+  setStatus(`Running ${stepId}...`);
 
   try {
-    const response = await fetch('/api/provision', {
+    const response = await fetch('/api/steps/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -107,31 +154,44 @@ async function handleProvisionSubmit(event) {
 
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setStatus('Provisioning failed.', result);
+      setStatus('Step run failed.', result);
       return;
     }
 
-    setStatus('Provisioning complete.', result);
-    const context = await loadContext();
-    populateWorkspaces(context.workspaces);
-    populateCapacities(context.capacities);
-    setContextSummary(context);
+    setStatus(result.prompt || 'Step processed.', result);
+    await refreshContext();
   } catch (error) {
-    setStatus(error.message || 'Provisioning failed unexpectedly.');
+    setStatus(error.message || 'Step run failed unexpectedly.');
   } finally {
     setBusy(false);
   }
 }
 
+async function handleSelectionSave(event) {
+  event.preventDefault();
+  const payload = {
+    ...getSelection()
+  };
+
+  if (!payload.subscription_id || !payload.key_vault_id) {
+    setStatus('Pick a subscription and key vault, then save your selection.');
+    return;
+  }
+
+  setStatus('Selection saved. Use Run Step to proceed through each notebook stage.', payload);
+}
+
 async function refreshContext() {
   setBusy(true);
-  setStatus('Refreshing Fabric context...');
+  setStatus('Refreshing Azure context...');
   try {
     const context = await loadContext();
-    populateWorkspaces(context.workspaces);
-    populateCapacities(context.capacities);
+    cachedContext = context;
+    populateSubscriptions(context.subscriptions);
+    populateKeyVaults(context.key_vaults);
+    renderSteps(context.steps);
     setContextSummary(context);
-    setStatus('Context loaded. Select capacity and workspace options, then provision.');
+    setStatus('Context loaded. Select your subscription and key vault, then run each step.');
   } catch (error) {
     setStatus(error.message || 'Initialization failed.');
   } finally {
@@ -141,11 +201,10 @@ async function refreshContext() {
 
 (async function init() {
   try {
-    wireWorkspaceModeToggle();
     document.getElementById('refresh-context').addEventListener('click', refreshContext);
     await refreshContext();
 
-    document.getElementById('provision-form').addEventListener('submit', handleProvisionSubmit);
+    document.getElementById('guided-form').addEventListener('submit', handleSelectionSave);
   } catch (error) {
     setStatus(error.message || 'Initialization failed.');
   }

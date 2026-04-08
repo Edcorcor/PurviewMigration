@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Fabric Provisioning Portal</title>
+  <title>Purview Guided Run Portal</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -12,14 +12,14 @@
 
   <main class="container">
     <section class="hero">
-      <h1>Fabric Provisioning Portal</h1>
-      <p>Sign in once, detect your tenant, select capacity, choose or create workspace, and provision notebook plus Spark environment.</p>
+      <h1>Purview Guided Run Portal</h1>
+      <p>Authenticate once, detect tenant context, select a subscription and key vault, then run each notebook step with guided prompts.</p>
     </section>
 
     {% if not signed_in %}
       <section class="card login-card">
         <h2>Step 1: Sign In</h2>
-        <p>Use Microsoft Entra sign-in with Fabric scopes.</p>
+        <p>Use Microsoft Entra sign-in with Azure Resource Manager permissions.</p>
         <a class="button" href="/auth/login">Sign in with Microsoft</a>
       </section>
     {% else %}
@@ -37,55 +37,35 @@
         </div>
       </section>
 
-      <section class="card" id="provision-card">
-        <h2>Step 2: Provision Fabric Assets</h2>
-        <p id="context-summary" class="context-summary">Loading Fabric context...</p>
+      <section class="card" id="guided-run-card">
+        <h2>Step 2: Select Azure Context</h2>
+        <p id="context-summary" class="context-summary">Loading Azure context...</p>
         <div class="actions-row">
           <button class="button secondary" type="button" id="refresh-context">Refresh Context</button>
         </div>
 
-        <form id="provision-form">
+        <form id="guided-form">
           <div class="field-group">
-            <label>Workspace Mode</label>
-            <div class="inline-options">
-              <label><input type="radio" name="workspace_mode" value="existing" checked /> Use Existing</label>
-              <label><input type="radio" name="workspace_mode" value="create" /> Create New</label>
-            </div>
+            <label for="subscription_id">Subscription</label>
+            <select id="subscription_id" name="subscription_id"></select>
           </div>
 
-          <div class="field-group" id="existing-workspace-group">
-            <label for="workspace_id">Workspace</label>
-            <select id="workspace_id" name="workspace_id"></select>
+          <div class="field-group">
+            <label for="key_vault_id">Key Vault (from any subscription)</label>
+            <select id="key_vault_id" name="key_vault_id"></select>
           </div>
 
-          <div id="create-workspace-group" class="hidden">
-            <div class="field-group">
-              <label for="workspace_name">Workspace Name</label>
-              <input id="workspace_name" name="workspace_name" value="{{ workspace_name_default }}" />
-            </div>
-
-            <div class="field-group">
-              <label for="capacity_id">Capacity</label>
-              <select id="capacity_id" name="capacity_id">
-                <option value="">No explicit capacity</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="field-grid">
-            <div class="field-group">
-              <label for="environment_name">Spark Environment Name</label>
-              <input id="environment_name" name="environment_name" value="{{ environment_name_default }}" />
-            </div>
-            <div class="field-group">
-              <label for="notebook_name">Notebook Name</label>
-              <input id="notebook_name" name="notebook_name" value="{{ notebook_name_default }}" />
-            </div>
-          </div>
-
-          <button class="button" type="submit" id="submit-button">Provision Workspace + Environment + Notebook</button>
+          <button class="button" type="submit" id="save-selection-button">Save Selection</button>
         </form>
+      </section>
 
+      <section class="card" id="steps-card">
+        <h2>Step 3: Run Guided Steps</h2>
+        <div id="steps-list" class="steps-list"></div>
+      </section>
+
+      <section class="card">
+        <h2>Status</h2>
         <pre id="status" class="status"></pre>
       </section>
     {% endif %}
