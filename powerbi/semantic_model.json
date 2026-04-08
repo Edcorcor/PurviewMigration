@@ -1,0 +1,108 @@
+{
+  "name": "Purview Governance Audit Model",
+  "tables": [
+    {
+      "name": "dim_collections",
+      "grain": "One row per collection per source account",
+      "keys": ["collection_id", "source_account"]
+    },
+    {
+      "name": "dim_sources",
+      "grain": "One row per data source per source account",
+      "keys": ["source_id", "source_account"]
+    },
+    {
+      "name": "dim_assets",
+      "grain": "One row per asset per source system",
+      "keys": ["asset_id", "source_system"]
+    },
+    {
+      "name": "dim_data_products",
+      "grain": "One row per data product",
+      "keys": ["data_product_id"]
+    },
+    {
+      "name": "fact_scans",
+      "grain": "One row per scan",
+      "keys": ["scan_id", "source_account"]
+    },
+    {
+      "name": "fact_quality",
+      "grain": "One row per asset and data product quality record",
+      "keys": ["asset_id", "data_product_id"]
+    },
+    {
+      "name": "relationships",
+      "grain": "One row per modeled relationship edge",
+      "keys": ["relationship_type", "parent_id", "child_id"]
+    },
+    {
+      "name": "key_vault_validation",
+      "grain": "One row per validated key vault",
+      "keys": ["vault_name"]
+    }
+  ],
+  "relationships": [
+    {
+      "fromTable": "dim_collections",
+      "fromColumn": "collection_id",
+      "toTable": "dim_sources",
+      "toColumn": "collection_id",
+      "cardinality": "one-to-many"
+    },
+    {
+      "fromTable": "dim_collections",
+      "fromColumn": "collection_id",
+      "toTable": "dim_assets",
+      "toColumn": "collection_id",
+      "cardinality": "one-to-many"
+    },
+    {
+      "fromTable": "dim_data_products",
+      "fromColumn": "data_product_id",
+      "toTable": "dim_assets",
+      "toColumn": "data_product_id",
+      "cardinality": "one-to-many"
+    },
+    {
+      "fromTable": "dim_sources",
+      "fromColumn": "source_id",
+      "toTable": "fact_scans",
+      "toColumn": "data_source_id",
+      "cardinality": "one-to-many"
+    },
+    {
+      "fromTable": "dim_assets",
+      "fromColumn": "asset_id",
+      "toTable": "fact_quality",
+      "toColumn": "asset_id",
+      "cardinality": "one-to-many"
+    }
+  ],
+  "measures": [
+    {
+      "name": "Total Assets",
+      "expression": "COUNTROWS(dim_assets)"
+    },
+    {
+      "name": "Total Collections",
+      "expression": "COUNTROWS(dim_collections)"
+    },
+    {
+      "name": "Total Data Products",
+      "expression": "COUNTROWS(dim_data_products)"
+    },
+    {
+      "name": "Average Quality Score",
+      "expression": "AVERAGEX(fact_quality, VALUE(fact_quality[quality_score]))"
+    },
+    {
+      "name": "Connected Key Vaults",
+      "expression": "CALCULATE(COUNTROWS(key_vault_validation), key_vault_validation[fabric_connected] = TRUE())"
+    },
+    {
+      "name": "Scan Coverage",
+      "expression": "DIVIDE(COUNTROWS(fact_scans), COUNTROWS(dim_sources), 0)"
+    }
+  ]
+}

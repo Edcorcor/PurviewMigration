@@ -2,7 +2,8 @@
 
 **Created**: April 8, 2026  
 **Project**: PurviewMigration  
-**Status**: ✅ **READY FOR PHASE 1 AUDIT**
+**Status**: ✅ **REPO IMPLEMENTATION COMPLETE**
+**Runtime Note**: Live Fabric publish still requires valid tenant permissions and credentials.
 
 ---
 
@@ -50,16 +51,24 @@ PurviewMigration/
 
 ## ✨ What's Included
 
-### **Jupyter Notebooks (3 fully populated, 2 skeleton)**
+### **Jupyter Notebooks (fully populated)**
 
 | # | Notebook | Status | Purpose | Outputs |
 |---|----------|--------|---------|---------|
 | **00** | Setup & Discovery | ✅ Complete | Validate environment, discover Purview instances, check Key Vaults | Config summary, primary account selection |
 | **01** | Purview Extract | ✅ Complete | Extract all Purview metadata (collections, sources, assets, scans, lineage) | 6 Spark DataFrames: collections, sources, assets, scans, classifications, runtimes |
 | **02** | Fabric Extract | ✅ Complete | Extract Unified Catalog (Data Products, quality scores, domains) | 4 Spark DataFrames: products, assets, quality, domains |
-| **03** | Transform Data | 📋 Skeleton | Deduplicate, normalize, build relationship graph | Star schema: dimensions + facts for PBI |
-| **04** | Key Vault Check | 📋 Skeleton | Validate KV connectivity to Fabric, generate remediation | Connectivity status, remediation checklist |
-| **05** | Load Fabric | 📋 Skeleton | Persist Silver/Gold tables to Fabric OneLake | Delta tables in Lakehouse, audit snapshot |
+| **03** | Transform Data | ✅ Complete | Deduplicate, normalize, build relationship graph | Curated dimensions, facts, relationship graph |
+| **04** | Key Vault Check | ✅ Complete | Validate KV connectivity to Fabric, generate remediation | Connectivity status, evidence, remediation checklist |
+| **05** | Load Fabric | ✅ Complete | Persist Silver/Gold tables to Fabric path or local staging | Staged parquet outputs, load manifest, Power BI dataset manifest |
+
+### **Power BI Starter Assets**
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `powerbi/semantic_model.json` | Starter semantic model definition | ✅ Ready |
+| `powerbi/measures.dax` | Baseline DAX measures | ✅ Ready |
+| `powerbi/report_spec.md` | Report pages and visual specification | ✅ Ready |
 
 ### **Python Modules (Production Ready)**
 
@@ -254,10 +263,13 @@ See `QUICKSTART.md` for full troubleshooting guide.
 ## 🎓 What You Can Do Now
 
 ✅ **Ready to execute immediately**:
-- Run all 5 notebooks sequentially
+- Run all 6 notebooks sequentially
 - Extract complete Purview + Fabric metadata
 - Generate audit report and PBI datasource
 - Identify gaps before migration
+
+⚠ **Still environment-dependent**:
+- Real Fabric environment/notebook publish requires working credentials and tenant permissions.
 - Validate Key Vault connectivity
 
 ✅ **Ready for customization**:

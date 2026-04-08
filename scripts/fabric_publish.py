@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 import requests
 import yaml
-from azure.identity import ClientSecretCredential, DeviceCodeCredential
+from azure.identity import AzureCliCredential, ClientSecretCredential, DefaultAzureCredential, DeviceCodeCredential, InteractiveBrowserCredential
 from dotenv import load_dotenv
 
 BASE_URL = "https://api.fabric.microsoft.com/v1"
@@ -83,11 +83,29 @@ def get_access_token(config: Dict[str, Any]) -> str:
         credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
         return credential.get_token("https://api.fabric.microsoft.com/.default").token
 
+    try:
+        credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        return credential.get_token("https://api.fabric.microsoft.com/.default").token
+    except Exception:
+        pass
+
+    try:
+        credential = AzureCliCredential(tenant_id=tenant_id)
+        return credential.get_token("https://api.fabric.microsoft.com/.default").token
+    except Exception:
+        pass
+
+    try:
+        credential = InteractiveBrowserCredential(tenant_id=tenant_id)
+        return credential.get_token("https://api.fabric.microsoft.com/.default").token
+    except Exception:
+        pass
+
     public_client_id = os.getenv("FABRIC_PUBLIC_CLIENT_ID")
     if not public_client_id:
         raise FabricPublishError(
-            "Fabric publish requires delegated or app authentication. Set FABRIC_PUBLIC_CLIENT_ID for device-code login, "
-            "or AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for service principal auth."
+            "Fabric publish requires delegated or app authentication. Tried environment credentials, Azure CLI, and interactive browser auth. "
+            "Set FABRIC_PUBLIC_CLIENT_ID for device-code login, or AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for service principal auth."
         )
 
     def prompt_callback(verification_uri: str, user_code: str, expires_on: Any) -> None:

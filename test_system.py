@@ -2,7 +2,10 @@
 """Quick test of all modules"""
 
 import sys
+from pathlib import Path
 sys.path.insert(0, 'src')
+
+ROOT = Path(__file__).parent
 
 print("="*60)
 print("SYSTEM TEST - Module Import & Configuration")
@@ -62,6 +65,40 @@ try:
         print(f"   • {key}: {value}")
 except Exception as e:
     print(f"   ✗ Configuration read failed: {e}")
+    sys.exit(1)
+
+# Test 4: Downstream notebook presence
+print("\n4. Notebook deliverables:")
+try:
+    notebook_paths = [
+        ROOT / "notebooks" / "03-Transform-Data.ipynb",
+        ROOT / "notebooks" / "04-KeyVault-Validation.ipynb",
+        ROOT / "notebooks" / "05-Load-Fabric.ipynb",
+    ]
+    for notebook_path in notebook_paths:
+        if notebook_path.exists() and notebook_path.stat().st_size > 0:
+            print(f"   ✓ {notebook_path.name}")
+        else:
+            raise FileNotFoundError(f"Notebook missing or empty: {notebook_path}")
+except Exception as e:
+    print(f"   ✗ Notebook validation failed: {e}")
+    sys.exit(1)
+
+# Test 5: Power BI starter assets
+print("\n5. Power BI starter assets:")
+try:
+    powerbi_paths = [
+        ROOT / "powerbi" / "semantic_model.json",
+        ROOT / "powerbi" / "report_spec.md",
+        ROOT / "powerbi" / "measures.dax",
+    ]
+    for asset_path in powerbi_paths:
+        if asset_path.exists() and asset_path.stat().st_size > 0:
+            print(f"   ✓ {asset_path.name}")
+        else:
+            raise FileNotFoundError(f"Power BI asset missing or empty: {asset_path}")
+except Exception as e:
+    print(f"   ✗ Power BI asset validation failed: {e}")
     sys.exit(1)
 
 print("\n" + "="*60)

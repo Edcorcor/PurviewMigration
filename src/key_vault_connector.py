@@ -1,10 +1,7 @@
-"""
-Key Vault Connector
-Validates Key Vault connectivity and Fabric wiring.
-Identifies disconnected vaults and provides remediation guidance.
-"""
+"""Key Vault access and Fabric-readiness checks."""
 
 import logging
+import os
 from typing import Dict, List, Any, Optional
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
@@ -80,13 +77,44 @@ class KeyVaultConnector:
             "vault_name": self.vault_name,
             "is_connected": False,
             "status": "UNKNOWN",
+            "workspace_configured": False,
+            "evidence": {},
             "remediation_steps": []
         }
-        
-        # Check for Fabric-related configuration
-        # This would check for Fabric workspace linked credentials, etc.
-        # Placeholder for actual implementation
-        
+
+        try:
+            secret_properties = list(self.client.list_properties_of_secrets())
+        except Exception as exc:
+            logger.warning("Unable to inspect vault metadata for %s: %s", self.vault_name, exc)
+            secret_properties = []
+
+        workspace_id = os.getenv("FABRIC_WORKSPACE_ID", "")
+        workspace_name = os.getenv("FABRIC_WORKSPACE_NAME", "")
+        environment_name = os.getenv("FABRIC_ENVIRONMENT_NAME", "")
+
+        candidate_secret_names = [
+            secret.name
+            for secret in secret_properties
+            if any(token in secret.name.lower() for token in ("fabric", "powerbi", "workspace", "tenant", "client", "secret"))
+        ]
+
+        accessible = self.check_key_vault_access()
+        status["workspace_configured"] = bool(workspace_id or workspace_name)
+        status["evidence"] = {
+            "accessible": accessible,
+            "workspace_id_present": bool(workspace_id),
+            "workspace_name_present": bool(workspace_name),
+            "environment_name_present": bool(environment_name),
+            "candidate_secret_names": candidate_secret_names,
+            "secret_count": len(secret_properties),
+        }
+
+        status["is_connected"] = accessible and status["workspace_configured"] and len(candidate_secret_names) > 0
+        if status["is_connected"]:
+            status["status"] = "CONNECTED"
+            return status
+
+        status["status"] = "READY_FOR_WIRING" if accessible else "NO_ACCESS"
         if not status["is_connected"]:
             status["remediation_steps"] = [
                 "1. Navigate to Azure Key Vault in Azure Portal",
@@ -94,7 +122,8 @@ class KeyVaultConnector:
                 "3. Add role assignment for your Fabric service principal",
                 "4. Ensure 'get' and 'list' permissions are granted",
                 f"5. In Fabric workspace, add Key Vault reference to '{self.vault_name}'",
-                "6. Test connection and re-run this check"
+                "6. Add or confirm Fabric-related secrets or references required by your deployment",
+                "7. Test connection and re-run this check"
             ]
         
         return status

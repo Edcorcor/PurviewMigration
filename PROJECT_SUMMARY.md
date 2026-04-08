@@ -2,7 +2,7 @@
 
 **Date**: April 8, 2026  
 **Project**: Purview Data Governance Audit & Migration to Landing Zone  
-**Status**: ✅ **COMPLETE & READY FOR EXECUTION**
+**Status**: ✅ **CODE COMPLETE AND READY FOR ENVIRONMENT VALIDATION**
 
 ---
 
@@ -29,13 +29,18 @@ PurviewMigration/
 ├─ .squad/                           (Squad team coordination files)
 ├─ .copilot/                         (Copilot configuration)
 │
-├─ notebooks/                        📓 JUPYTER NOTEBOOKS (5 complete)
+├─ notebooks/                        📓 JUPYTER NOTEBOOKS (6 complete)
 │  ├─ 00-Setup.ipynb                 ✅ Environment setup & discovery
 │  ├─ 01-Purview-Extract.ipynb       ✅ Purview metadata extraction
 │  ├─ 02-UnifiedCatalog-Extract.ipynb ✅ Fabric metadata extraction
 │  ├─ 03-Transform-Data.ipynb        ✅ Schema normalization & relationships
 │  ├─ 04-KeyVault-Validation.ipynb   ✅ Connectivity checks
 │  └─ 05-Load-Fabric.ipynb           ✅ Fabric Lakehouse persistence
+├─ powerbi/                          📊 POWER BI STARTER ASSETS
+│  ├─ semantic_model.json            ✅ Starter semantic model definition
+│  ├─ measures.dax                   ✅ Starter measures
+│  └─ report_spec.md                 ✅ Report layout and visuals
+
 │
 ├─ src/                              🐍 PYTHON MODULES (4 production modules)
 │  ├─ config_manager.py              Environment-aware config loader
@@ -243,6 +248,10 @@ Before running notebooks, ensure:
 - [ ] Key Vault is accessible from your network
 
 ---
+
+## Live Dependency Note
+
+The remaining environment dependency is Fabric and tenant authorization. The repo now contains the downstream notebooks, Power BI starter assets, and auth fallbacks, but live publish still requires valid permissions and credentials in your tenant.
 
 ## 🆘 Need Help?
 

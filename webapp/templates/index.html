@@ -39,6 +39,10 @@
 
       <section class="card" id="provision-card">
         <h2>Step 2: Provision Fabric Assets</h2>
+        <p id="context-summary" class="context-summary">Loading Fabric context...</p>
+        <div class="actions-row">
+          <button class="button secondary" type="button" id="refresh-context">Refresh Context</button>
+        </div>
 
         <form id="provision-form">
           <div class="field-group">
@@ -79,7 +83,7 @@
             </div>
           </div>
 
-          <button class="button" type="submit">Provision Workspace + Environment + Notebook</button>
+          <button class="button" type="submit" id="submit-button">Provision Workspace + Environment + Notebook</button>
         </form>
 
         <pre id="status" class="status"></pre>

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import logging
 
 import requests
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from scripts.fabric_publish import (
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env", override=False)
+logger = logging.getLogger(__name__)
 
 NOTEBOOK_PATH = ROOT / "notebooks" / "00-Setup.ipynb"
 ENV_FILE = ROOT / "fabric" / "environment.yml"
@@ -97,10 +99,14 @@ def _tenant_summary(claims: Dict[str, Any]) -> Dict[str, str]:
 
 def _list_capacities(token: str) -> List[Dict[str, Any]]:
     headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get("https://api.powerbi.com/v1.0/myorg/capacities", headers=headers, timeout=30)
-    if response.status_code == 200:
-        payload = response.json()
-        return payload.get("value", [])
+    try:
+        response = requests.get("https://api.powerbi.com/v1.0/myorg/capacities", headers=headers, timeout=30)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload.get("value", [])
+        logger.warning("Capacity lookup returned %s: %s", response.status_code, response.text)
+    except requests.RequestException as exc:
+        logger.warning("Capacity lookup failed: %s", exc)
     return []
 
 
@@ -159,15 +165,23 @@ def api_context(request: Request):
     token = _access_token(request)
     tenant = _tenant_summary(request.session.get("user_claims", {}))
 
-    fabric = FabricClient(token)
-    workspaces = fabric.list_all_workspaces()
-    capacities = _list_capacities(token)
+    try:
+        fabric = FabricClient(token)
+        workspaces = fabric.list_all_workspaces()
+        capacities = _list_capacities(token)
+    except Exception as exc:
+        logger.exception("Failed to load portal context")
+        raise HTTPException(status_code=502, detail=f"Could not load Fabric context: {exc}") from exc
 
     return JSONResponse(
         {
             "tenant": tenant,
             "workspaces": workspaces,
             "capacities": capacities,
+            "summary": {
+                "workspace_count": len(workspaces),
+                "capacity_count": len(capacities),
+            },
         }
     )
 
@@ -177,68 +191,83 @@ def api_provision(request: Request, payload: ProvisionRequest):
     token = _access_token(request)
     fabric = FabricClient(token)
 
-    workspace: Optional[Dict[str, Any]] = None
-    if payload.workspace_mode == "existing":
-        if not payload.workspace_id:
-            raise HTTPException(status_code=400, detail="workspace_id is required when selecting existing workspace.")
-        workspace = {"id": payload.workspace_id, "displayName": "Existing Workspace"}
-    elif payload.workspace_mode == "create":
-        if not payload.workspace_name:
-            raise HTTPException(status_code=400, detail="workspace_name is required for workspace creation.")
-        existing = fabric.find_workspace_by_name(payload.workspace_name)
-        workspace = existing or fabric.create_workspace(
-            payload.workspace_name,
-            payload.workspace_description or "Purview governance audit workspace",
-            capacity_id=payload.capacity_id,
-        )
-    else:
-        raise HTTPException(status_code=400, detail="workspace_mode must be either 'existing' or 'create'.")
+    try:
+        workspace: Optional[Dict[str, Any]] = None
+        if payload.workspace_mode == "existing":
+            if not payload.workspace_id:
+                raise HTTPException(status_code=400, detail="workspace_id is required when selecting existing workspace.")
+            workspace = {"id": payload.workspace_id, "displayName": "Existing Workspace"}
+        elif payload.workspace_mode == "create":
+            if not payload.workspace_name:
+                raise HTTPException(status_code=400, detail="workspace_name is required for workspace creation.")
+            existing = fabric.find_workspace_by_name(payload.workspace_name)
+            workspace = existing or fabric.create_workspace(
+                payload.workspace_name,
+                payload.workspace_description or "Purview governance audit workspace",
+                capacity_id=payload.capacity_id,
+            )
+        else:
+            raise HTTPException(status_code=400, detail="workspace_mode must be either 'existing' or 'create'.")
 
-    workspace_id = workspace["id"]
+        workspace_id = workspace["id"]
 
-    environment_name = payload.environment_name or "PurviewAuditSpark"
-    existing_environment = fabric.find_item_by_name(workspace_id, "Environment", environment_name)
-    if existing_environment:
-        environment = existing_environment
-    else:
-        environment_def = build_environment_definition(
-            ENV_FILE,
-            SPARK_SETTINGS_FILE,
-            environment_name,
-            payload.environment_description or "Spark environment for Purview governance audit notebooks",
-        )
-        environment = fabric.create_environment(
-            workspace_id,
-            environment_name,
-            payload.environment_description or "Spark environment for Purview governance audit notebooks",
-            environment_def,
-        )
+        environment_name = payload.environment_name or "PurviewAuditSpark"
+        existing_environment = fabric.find_item_by_name(workspace_id, "Environment", environment_name)
+        if existing_environment:
+            environment = existing_environment
+        else:
+            environment_def = build_environment_definition(
+                ENV_FILE,
+                SPARK_SETTINGS_FILE,
+                environment_name,
+                payload.environment_description or "Spark environment for Purview governance audit notebooks",
+            )
+            environment = fabric.create_environment(
+                workspace_id,
+                environment_name,
+                payload.environment_description or "Spark environment for Purview governance audit notebooks",
+                environment_def,
+            )
 
-    if environment.get("id"):
-        fabric.publish_environment(workspace_id, environment["id"])
+        publish_result: Dict[str, Any] = {}
+        if environment.get("id"):
+            publish_result = fabric.publish_environment(workspace_id, environment["id"])
 
-    notebook_name = payload.notebook_name or "00-Setup"
-    existing_notebook = fabric.find_item_by_name(workspace_id, "Notebook", notebook_name)
-    if existing_notebook:
-        notebook = existing_notebook
-    else:
-        notebook_def = build_notebook_definition(
-            NOTEBOOK_PATH,
-            notebook_name,
-            payload.notebook_description or "Purview governance setup and discovery notebook",
-        )
-        notebook = fabric.create_notebook(
-            workspace_id,
-            notebook_name,
-            payload.notebook_description or "Purview governance setup and discovery notebook",
-            notebook_def,
-        )
+        notebook_name = payload.notebook_name or "00-Setup"
+        existing_notebook = fabric.find_item_by_name(workspace_id, "Notebook", notebook_name)
+        if existing_notebook:
+            notebook = existing_notebook
+        else:
+            notebook_def = build_notebook_definition(
+                NOTEBOOK_PATH,
+                notebook_name,
+                payload.notebook_description or "Purview governance setup and discovery notebook",
+            )
+            notebook = fabric.create_notebook(
+                workspace_id,
+                notebook_name,
+                payload.notebook_description or "Purview governance setup and discovery notebook",
+                notebook_def,
+            )
 
-    return JSONResponse(
-        {
-            "workspace": workspace,
-            "environment": environment,
-            "notebook": notebook,
-            "message": "Provisioning complete.",
-        }
-    )
+        return JSONResponse(
+            {
+                "workspace": workspace,
+                "environment": environment,
+                "environment_publish": publish_result,
+                "notebook": notebook,
+                "message": "Provisioning complete.",
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Provisioning failed")
+        return JSONResponse(
+            {
+                "message": "Provisioning failed.",
+                "error": str(exc),
+                "workspace_mode": payload.workspace_mode,
+            },
+            status_code=502,
+        )

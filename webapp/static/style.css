@@ -104,6 +104,11 @@ body {
   border: 1px solid var(--outline);
 }
 
+.button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .field-group {
   display: flex;
   flex-direction: column;
@@ -133,6 +138,17 @@ input, select {
 
 .hidden {
   display: none;
+}
+
+.context-summary {
+  margin-top: 0;
+  color: var(--muted);
+}
+
+.actions-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
 }
 
 .status {

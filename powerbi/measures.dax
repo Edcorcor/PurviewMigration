@@ -1,0 +1,8 @@
+Total Assets = COUNTROWS(dim_assets)
+Total Collections = COUNTROWS(dim_collections)
+Total Data Products = COUNTROWS(dim_data_products)
+Average Quality Score = AVERAGEX(fact_quality, VALUE(fact_quality[quality_score]))
+Connected Key Vaults = CALCULATE(COUNTROWS(key_vault_validation), key_vault_validation[fabric_connected] = TRUE())
+Accessible Key Vaults = CALCULATE(COUNTROWS(key_vault_validation), key_vault_validation[accessible] = TRUE())
+Scan Coverage = DIVIDE(COUNTROWS(fact_scans), COUNTROWS(dim_sources), 0)
+Certified Asset Count = CALCULATE(COUNTROWS(dim_assets), dim_assets[certified] = TRUE())

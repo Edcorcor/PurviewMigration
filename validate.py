@@ -136,6 +136,29 @@ def check_config_file():
         return False
 
 
+def check_repo_artifacts():
+    """Verify downstream notebooks and reporting assets exist"""
+    print("\n✓ Checking repository artifacts...")
+
+    required_paths = [
+        Path(__file__).parent / "notebooks" / "03-Transform-Data.ipynb",
+        Path(__file__).parent / "notebooks" / "04-KeyVault-Validation.ipynb",
+        Path(__file__).parent / "notebooks" / "05-Load-Fabric.ipynb",
+        Path(__file__).parent / "powerbi" / "semantic_model.json",
+        Path(__file__).parent / "powerbi" / "report_spec.md",
+    ]
+
+    missing = []
+    for file_path in required_paths:
+        if file_path.exists() and file_path.stat().st_size > 0:
+            print(f"  ✓ {file_path.name}")
+        else:
+            print(f"  ✗ Missing or empty: {file_path.name}")
+            missing.append(file_path.name)
+
+    return len(missing) == 0
+
+
 def main():
     print("=" * 60)
     print("Purview Data Governance Audit - Pre-flight Check")
@@ -147,6 +170,7 @@ def main():
         ("Purview Discovery", check_purview_discovery),
         ("Key Vault Access", check_key_vault),
         ("Configuration File", check_config_file),
+        ("Repository Artifacts", check_repo_artifacts),
     ]
     
     results = []

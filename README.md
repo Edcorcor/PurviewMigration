@@ -21,17 +21,22 @@ A comprehensive Spark-based system to extract, audit, and report on all Purview 
 ```
 ┌─ Jupyter Notebooks (Orchestration)
 │   ├─ 00-Setup (Environment validation, multi-instance discovery)
-│   ├─ 01-Purview-Extract (Full data export)
-│   ├─ 02-UnifiedCatalog-Extract (Data Products & Quality)
-│   ├─ 03-Transform-Data (Spark jobs for deduplication & relationships)
-│   ├─ 04-KeyVault-Check (Fabric connectivity validation)
-│   └─ 05-Load-Fabric (Write to Wallet Workspace)
+│   ├─ 01-Purview-Extract (Full data export + raw persistence)
+│   ├─ 02-UnifiedCatalog-Extract (Data Products & Quality + raw persistence)
+│   ├─ 03-Transform-Data (Spark jobs for deduplication, dimensions, and relationships)
+│   ├─ 04-KeyVault-Validation (Connectivity validation and remediation reporting)
+│   └─ 05-Load-Fabric (Publish to Fabric path or local staging)
 │
 ├─ Python Modules (/src)
 │   ├─ purview_client.py (SDK wrapper)
 │   ├─ unified_catalog_client.py (Fabric SDK)
 │   ├─ key_vault_connector.py (Key Vault & Fabric validation)
 │   └─ config_manager.py (Environment-aware configuration)
+│
+├─ Power BI Assets (/powerbi)
+│   ├─ semantic_model.json (starter semantic model)
+│   ├─ measures.dax (starter measures)
+│   └─ report_spec.md (report layout and visuals)
 │
 ├─ Configuration (/config)
 │   └─ environment.yml (Multi-environment settings, uses env vars)
@@ -95,7 +100,7 @@ A comprehensive Spark-based system to extract, audit, and report on all Purview 
 
 ✅ **Fabric Integration**
 - Auto-creates Fabric workspace if needed
-- Writes to OneLake in optimized formats
+- Writes to configured OneLake path when available, otherwise stages locally
 - Ready for Power BI semantic models
 
 ✅ **Key Vault Health Check**
@@ -136,6 +141,14 @@ A comprehensive Spark-based system to extract, audit, and report on all Purview 
    - **Data Quality Dashboard** - Quality scores by Data Product
    - **Key Vault Status** - Fabric connectivity heat map
    - **Asset Lineage** - Network diagram of relationships
+
+Starter report assets are included in [powerbi/semantic_model.json](powerbi/semantic_model.json), [powerbi/measures.dax](powerbi/measures.dax), and [powerbi/report_spec.md](powerbi/report_spec.md).
+
+## Current Validation Status
+
+- Repository backlog items are implemented in code.
+- Live Fabric provisioning still depends on tenant permissions and working credentials at runtime.
+- Use `python validate.py` and the provisioning portal to verify access in your environment.
 
 ## Naming Convention (Disney Villain Theme 🦹)
 

@@ -1,9 +1,22 @@
 async function loadContext() {
   const response = await fetch('/api/context');
   if (!response.ok) {
-    throw new Error('Could not load Fabric context.');
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || 'Could not load Fabric context.');
   }
   return response.json();
+}
+
+function setBusy(isBusy) {
+  const submitButton = document.getElementById('submit-button');
+  const refreshButton = document.getElementById('refresh-context');
+  if (submitButton) {
+    submitButton.disabled = isBusy;
+    submitButton.textContent = isBusy ? 'Provisioning...' : 'Provision Workspace + Environment + Notebook';
+  }
+  if (refreshButton) {
+    refreshButton.disabled = isBusy;
+  }
 }
 
 function populateWorkspaces(workspaces) {
@@ -27,12 +40,23 @@ function populateWorkspaces(workspaces) {
 
 function populateCapacities(capacities) {
   const select = document.getElementById('capacity_id');
+  select.innerHTML = '<option value="">No explicit capacity</option>';
   for (const c of capacities || []) {
     const opt = document.createElement('option');
     opt.value = c.id || '';
     opt.textContent = c.displayName || c.id;
     select.appendChild(opt);
   }
+}
+
+function setContextSummary(context) {
+  const el = document.getElementById('context-summary');
+  if (!el) {
+    return;
+  }
+
+  const summary = context.summary || {};
+  el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.workspace_count || 0} workspace(s) | ${summary.capacity_count || 0} capacity option(s)`;
 }
 
 function setStatus(message, payload) {
@@ -71,32 +95,57 @@ async function handleProvisionSubmit(event) {
     notebook_name: document.getElementById('notebook_name').value || '00-Setup'
   };
 
+  setBusy(true);
   setStatus('Provisioning in progress. This can take a few minutes...');
 
-  const response = await fetch('/api/provision', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const response = await fetch('/api/provision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
 
-  const result = await response.json();
-  if (!response.ok) {
-    setStatus('Provisioning failed.', result);
-    return;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus('Provisioning failed.', result);
+      return;
+    }
+
+    setStatus('Provisioning complete.', result);
+    const context = await loadContext();
+    populateWorkspaces(context.workspaces);
+    populateCapacities(context.capacities);
+    setContextSummary(context);
+  } catch (error) {
+    setStatus(error.message || 'Provisioning failed unexpectedly.');
+  } finally {
+    setBusy(false);
   }
+}
 
-  setStatus('Provisioning complete.', result);
+async function refreshContext() {
+  setBusy(true);
+  setStatus('Refreshing Fabric context...');
+  try {
+    const context = await loadContext();
+    populateWorkspaces(context.workspaces);
+    populateCapacities(context.capacities);
+    setContextSummary(context);
+    setStatus('Context loaded. Select capacity and workspace options, then provision.');
+  } catch (error) {
+    setStatus(error.message || 'Initialization failed.');
+  } finally {
+    setBusy(false);
+  }
 }
 
 (async function init() {
   try {
     wireWorkspaceModeToggle();
-    const context = await loadContext();
-    populateWorkspaces(context.workspaces);
-    populateCapacities(context.capacities);
+    document.getElementById('refresh-context').addEventListener('click', refreshContext);
+    await refreshContext();
 
     document.getElementById('provision-form').addEventListener('submit', handleProvisionSubmit);
-    setStatus('Context loaded. Select capacity and workspace options, then provision.');
   } catch (error) {
     setStatus(error.message || 'Initialization failed.');
   }
