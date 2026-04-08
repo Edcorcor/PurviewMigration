@@ -6,7 +6,7 @@ How to decide who handles what.
 
 | Work Type | Route To | Examples |
 |-----------|----------|----------|
-| {domain 1} | {Name} | {example tasks} |
+| Web app and portal UX | Maleficent | Sign-in flow, tenant picker, capacity dropdown, workspace create/select UI, provisioning pages |
 | {domain 2} | {Name} | {example tasks} |
 | {domain 3} | {Name} | {example tasks} |
 | Code review | {Name} | Review PRs, check quality, suggest improvements |
