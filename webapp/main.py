@@ -16,6 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from msal import ConfidentialClientApplication
 from pydantic import BaseModel
+from scripts.fabric_publish import (
+    FabricClient as PublishFabricClient,
+    build_environment_definition,
+    build_notebook_definition,
+)
 from starlette.middleware.sessions import SessionMiddleware
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +88,7 @@ templates = Jinja2Templates(directory=str(ROOT / "webapp" / "templates"))
 # Keep bearer tokens server-side to avoid oversized cookie sessions.
 TOKEN_STORE: Dict[str, str] = {}
 FABRIC_STATE_PATH = ROOT / "data" / "reports" / "fabric_workspace_state.json"
+PURVIEW_STATE_PATH = ROOT / "data" / "reports" / "purview_selection_state.json"
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 
 class StepRunRequest(BaseModel):
@@ -90,6 +96,10 @@ class StepRunRequest(BaseModel):
     subscription_id: str
     key_vault_id: str
     key_vault_name: str
+
+
+class PurviewSelectionRequest(BaseModel):
+    primary_account_name: str
 
 
 def _required_env(name: str) -> str:
@@ -142,6 +152,20 @@ def _read_fabric_state() -> Optional[Dict[str, Any]]:
 def _write_fabric_state(state: Dict[str, Any]) -> None:
     FABRIC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     FABRIC_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _read_purview_state() -> Optional[Dict[str, Any]]:
+    if not PURVIEW_STATE_PATH.exists():
+        return None
+    try:
+        return json.loads(PURVIEW_STATE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_purview_state(state: Dict[str, Any]) -> None:
+    PURVIEW_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PURVIEW_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def _fabric_token() -> str:
@@ -268,6 +292,56 @@ def _ensure_fabric_workspace() -> Dict[str, Any]:
     return result
 
 
+def _bootstrap_fabric_assets(workspace_id: str) -> Dict[str, Any]:
+    token = _fabric_token()
+    client = PublishFabricClient(token)
+
+    env_name = os.getenv("FABRIC_ENVIRONMENT_NAME", "PurviewAuditSpark")
+    env_description = "Spark environment for Purview governance audit notebooks"
+    env_definition_file = ROOT / "fabric" / "environment.yml"
+    spark_settings_file = ROOT / "fabric" / "Sparkcompute.yml"
+
+    if not env_definition_file.exists() or not spark_settings_file.exists():
+        raise HTTPException(status_code=500, detail="Fabric environment definition files are missing in fabric/.")
+
+    environment = client.find_item_by_name(workspace_id, "Environment", env_name)
+    env_status = "REUSED"
+    if not environment:
+        definition = build_environment_definition(env_definition_file, spark_settings_file, env_name, env_description)
+        environment = client.create_environment(workspace_id, env_name, env_description, definition)
+        env_status = "CREATED"
+
+    environment_id = environment.get("id") if isinstance(environment, dict) else None
+    if environment_id:
+        client.publish_environment(workspace_id, environment_id)
+
+    notebook_results: List[Dict[str, str]] = []
+    for notebook_name in [item["notebook"] for item in STEP_DEFINITIONS]:
+        notebook_path = ROOT / "notebooks" / notebook_name
+        if not notebook_path.exists():
+            notebook_results.append({"name": notebook_name, "status": "MISSING"})
+            continue
+
+        display_name = notebook_path.stem
+        existing = client.find_item_by_name(workspace_id, "Notebook", display_name)
+        if existing:
+            notebook_results.append({"name": display_name, "status": "REUSED"})
+            continue
+
+        definition = build_notebook_definition(notebook_path, display_name, f"Provisioned notebook: {display_name}")
+        client.create_notebook(workspace_id, display_name, f"Provisioned notebook: {display_name}", definition)
+        notebook_results.append({"name": display_name, "status": "CREATED"})
+
+    return {
+        "environment": {
+            "name": env_name,
+            "status": env_status,
+            "id": environment_id or "",
+        },
+        "notebooks": notebook_results,
+    }
+
+
 def _fallback_interactive_login(request: Request) -> RedirectResponse:
     tenant_id = os.getenv("AZURE_TENANT_ID") or None
     access_token: Optional[str] = None
@@ -384,6 +458,34 @@ def _list_key_vaults(token: str, subscription_ids: List[str]) -> List[Dict[str, 
     return all_vaults
 
 
+def _list_purview_accounts(token: str, subscription_ids: List[str]) -> List[Dict[str, Any]]:
+    accounts: List[Dict[str, Any]] = []
+    for subscription_id in subscription_ids:
+        try:
+            response = requests.get(
+                f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Purview/accounts?api-version=2021-12-01",
+                headers=_headers(token),
+                timeout=30,
+            )
+            if response.status_code == 200:
+                for account in response.json().get("value", []):
+                    account_id = account.get("id", "")
+                    accounts.append(
+                        {
+                            "id": account_id,
+                            "name": account.get("name", ""),
+                            "subscription_id": subscription_id,
+                            "resource_group": (account_id.split("/")[4] if "/resourceGroups/" in account_id else ""),
+                            "location": account.get("location", ""),
+                        }
+                    )
+            else:
+                logger.warning("Purview account lookup failed for %s: %s %s", subscription_id, response.status_code, response.text)
+        except requests.RequestException as exc:
+            logger.warning("Purview account lookup request failed for %s: %s", subscription_id, exc)
+    return accounts
+
+
 def _artifact_status(path: Path) -> Dict[str, Any]:
     return {
         "exists": path.exists(),
@@ -434,6 +536,19 @@ def _fabric_workspace_context() -> Dict[str, Any]:
         "status": state.get("status", "REUSED"),
         "created_utc": state.get("created_utc"),
         "last_used_utc": state.get("last_used_utc"),
+    }
+
+
+def _purview_selection_context(discovered_accounts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    state = _read_purview_state() or {}
+    primary_name = state.get("primary_account_name", "")
+    if primary_name and not any(item.get("name") == primary_name for item in discovered_accounts):
+        primary_name = ""
+
+    return {
+        "accounts": discovered_accounts,
+        "primary_account_name": primary_name,
+        "configured": bool(primary_name),
     }
 
 
@@ -502,6 +617,7 @@ def api_context(request: Request):
         subscriptions = _list_subscriptions(token)
         subscription_ids = [sub.get("subscriptionId") for sub in subscriptions if sub.get("subscriptionId")]
         key_vaults = _list_key_vaults(token, subscription_ids)
+        purview_accounts = _list_purview_accounts(token, subscription_ids)
         steps = [_step_payload(step) for step in STEP_DEFINITIONS]
     except Exception as exc:
         logger.exception("Failed to load Azure context")
@@ -512,21 +628,46 @@ def api_context(request: Request):
             "tenant": tenant,
             "subscriptions": subscriptions,
             "key_vaults": key_vaults,
+            "purview": _purview_selection_context(purview_accounts),
             "steps": steps,
             "fabric_workspace": _fabric_workspace_context(),
             "summary": {
                 "subscription_count": len(subscriptions),
                 "key_vault_count": len(key_vaults),
+                "purview_account_count": len(purview_accounts),
             },
         }
     )
 
 
+@app.post("/api/purview/selection")
+def api_set_purview_selection(request: Request, payload: PurviewSelectionRequest):
+    token = _access_token(request)
+    subscriptions = _list_subscriptions(token)
+    subscription_ids = [sub.get("subscriptionId") for sub in subscriptions if sub.get("subscriptionId")]
+    discovered_accounts = _list_purview_accounts(token, subscription_ids)
+
+    if not any(item.get("name") == payload.primary_account_name for item in discovered_accounts):
+        raise HTTPException(status_code=400, detail=f"Primary Purview account not found: {payload.primary_account_name}")
+
+    state = {
+        "primary_account_name": payload.primary_account_name,
+        "updated_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_purview_state(state)
+    return JSONResponse({"purview": _purview_selection_context(discovered_accounts)})
+
+
 @app.post("/api/fabric/workspace/ensure")
 def api_ensure_fabric_workspace(request: Request):
     _access_token(request)
-    state = _ensure_fabric_workspace()
-    return JSONResponse({"fabric_workspace": _fabric_workspace_context(), "result": state})
+    workspace_state = _ensure_fabric_workspace()
+    bootstrap = _bootstrap_fabric_assets(workspace_state.get("workspace_id", ""))
+    return JSONResponse({
+        "fabric_workspace": _fabric_workspace_context(),
+        "workspace_result": workspace_state,
+        "bootstrap": bootstrap,
+    })
 
 
 @app.get("/api/steps")
@@ -561,6 +702,7 @@ def api_steps_run(request: Request, payload: StepRunRequest):
             "name": payload.key_vault_name,
         },
         "fabric_workspace": fabric_workspace,
+        "purview": _read_purview_state() or {},
         "current_step": {
             "id": step["id"],
             "title": step["title"],

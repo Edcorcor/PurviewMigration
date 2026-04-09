@@ -54,3 +54,44 @@ Date: 2026-04-08
 2. Configure Fabric auth and validate provisioning.
 3. Deliver baseline Power BI report.
 4. Run QA and align docs.
+
+## New Backlog - Migration Orchestrator
+
+### P0 - Must Have
+
+1. Add run-lock validation before migration starts
+- Owner: Scar
+- Files: webapp/main.py, data/reports/
+- Definition of done: Migration cannot start when a Purview DG run is active; lock status is visible in UI and persisted.
+
+2. Provision Data Governance Landing Zone and target Purview
+- Owner: Maleficent
+- Files: webapp/main.py, scripts/
+- Definition of done: App can create landing zone resources and deploy target Purview instance with idempotent reruns.
+
+3. Migrate metadata from source Purview to target Purview
+- Owner: Ursula
+- Files: notebooks/, src/purview_client.py
+- Definition of done: Metadata entities and relationships are copied with validation report and rerun safety.
+
+4. Generate permissions remediation script for data sources
+- Owner: Cruella
+- Files: scripts/, data/reports/
+- Definition of done: Script output removes old Purview MSI access and grants new Purview MSI access for impacted sources.
+
+5. Preserve app login permissions parity
+- Owner: Hades
+- Files: scripts/, data/reports/
+- Definition of done: Existing app logins and effective permissions are mapped from old Purview to new Purview and differences are reported.
+
+### P1 - High Value
+
+6. Add migration status and blockers dashboard in web app / report
+- Owner: Jafar
+- Files: webapp/templates/index.html, webapp/static/app.js, powerbi/report_spec.md
+- Definition of done: Operators can see migration stage, failures, impacted sources, and remediation completion.
+
+7. Automate optional Power BI publish from Fabric artifacts
+- Owner: Jafar
+- Files: notebooks/05-Load-Fabric.ipynb, scripts/
+- Definition of done: Notebook/script can publish or refresh report assets from prebuilt template and semantic model.

@@ -69,6 +69,33 @@ function populateKeyVaults(keyVaults) {
   }
 }
 
+function populatePurviewAccounts(purview) {
+  const select = document.getElementById('primary_purview_name');
+  if (!select) {
+    return;
+  }
+
+  select.innerHTML = '';
+  const accounts = purview?.accounts || [];
+  if (accounts.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No Purview accounts found';
+    select.appendChild(opt);
+    return;
+  }
+
+  for (const account of accounts) {
+    const opt = document.createElement('option');
+    opt.value = account.name || '';
+    opt.textContent = `${account.name} [${account.subscription_id}]`;
+    if (purview?.primary_account_name && purview.primary_account_name === account.name) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  }
+}
+
 function setContextSummary(context) {
   const el = document.getElementById('context-summary');
   if (!el) {
@@ -76,7 +103,7 @@ function setContextSummary(context) {
   }
 
   const summary = context.summary || {};
-  el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.subscription_count || 0} subscription(s) | ${summary.key_vault_count || 0} key vault(s)`;
+  el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.subscription_count || 0} subscription(s) | ${summary.key_vault_count || 0} key vault(s) | ${summary.purview_account_count || 0} Purview account(s)`;
 }
 
 function setFabricWorkspaceSummary(context) {
@@ -140,7 +167,8 @@ function getSelection() {
   return {
     subscription_id: subscriptionId,
     key_vault_id: vaultSelect.value || '',
-    key_vault_name: vaultOption?.dataset.vaultName || ''
+    key_vault_name: vaultOption?.dataset.vaultName || '',
+    primary_purview_name: document.getElementById('primary_purview_name')?.value || ''
   };
 }
 
@@ -206,6 +234,27 @@ async function handleSelectionSave(event) {
     return;
   }
 
+  if (!payload.primary_purview_name) {
+    setStatus('Select a primary Purview account before saving selection.');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/purview/selection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ primary_account_name: payload.primary_purview_name })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus('Could not save Purview primary selection.', result);
+      return;
+    }
+  } catch (error) {
+    setStatus(error.message || 'Could not save Purview selection.');
+    return;
+  }
+
   setStatus('Selection saved. Use Run Step to proceed through each notebook stage.', payload);
 }
 
@@ -217,6 +266,7 @@ async function refreshContext() {
     cachedContext = context;
     populateSubscriptions(context.subscriptions);
     populateKeyVaults(context.key_vaults);
+    populatePurviewAccounts(context.purview);
     renderSteps(context.steps);
     setContextSummary(context);
     setFabricWorkspaceSummary(context);
@@ -230,7 +280,7 @@ async function refreshContext() {
 
 async function ensureWorkspace() {
   setBusy(true);
-  setStatus('Ensuring Fabric workspace (create once, then reuse)...');
+  setStatus('Ensuring Fabric workspace and bootstrapping Spark environment/notebooks...');
   try {
     const response = await fetch('/api/fabric/workspace/ensure', {
       method: 'POST',
@@ -242,7 +292,7 @@ async function ensureWorkspace() {
       return;
     }
 
-    setStatus('Fabric workspace ready and persisted for reuse.', result);
+    setStatus('Fabric workspace and assets are ready and persisted for reuse.', result);
     await refreshContext();
   } catch (error) {
     setStatus(error.message || 'Could not ensure Fabric workspace.');

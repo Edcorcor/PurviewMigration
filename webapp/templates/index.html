@@ -41,7 +41,7 @@
         <h2>Step 2: Ensure Fabric Workspace</h2>
         <p id="fabric-workspace-summary" class="context-summary">Checking Fabric workspace state...</p>
         <div class="actions-row">
-          <button class="button" type="button" id="ensure-workspace">Ensure Fabric Workspace</button>
+          <button class="button" type="button" id="ensure-workspace">Ensure Workspace, Spark, and Notebooks</button>
         </div>
       </section>
 
@@ -61,6 +61,11 @@
           <div class="field-group">
             <label for="key_vault_id">Key Vault (from any subscription)</label>
             <select id="key_vault_id" name="key_vault_id"></select>
+          </div>
+
+          <div class="field-group">
+            <label for="primary_purview_name">Primary Purview Account</label>
+            <select id="primary_purview_name" name="primary_purview_name"></select>
           </div>
 
           <button class="button" type="submit" id="save-selection-button">Save Selection</button>
