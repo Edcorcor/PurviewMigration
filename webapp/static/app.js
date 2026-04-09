@@ -1,5 +1,9 @@
 let cachedContext = null;
 
+function fabricWorkspaceConfigured() {
+  return Boolean(cachedContext?.fabric_workspace?.configured);
+}
+
 async function loadContext() {
   const response = await fetch('/api/context');
   if (!response.ok) {
@@ -12,12 +16,16 @@ async function loadContext() {
 function setBusy(isBusy) {
   const submitButton = document.getElementById('save-selection-button');
   const refreshButton = document.getElementById('refresh-context');
+  const ensureButton = document.getElementById('ensure-workspace');
   if (submitButton) {
     submitButton.disabled = isBusy;
     submitButton.textContent = isBusy ? 'Saving...' : 'Save Selection';
   }
   if (refreshButton) {
     refreshButton.disabled = isBusy;
+  }
+  if (ensureButton) {
+    ensureButton.disabled = isBusy;
   }
 }
 
@@ -71,6 +79,21 @@ function setContextSummary(context) {
   el.textContent = `Tenant ${context.tenant?.tenant_id || 'unknown'} | ${summary.subscription_count || 0} subscription(s) | ${summary.key_vault_count || 0} key vault(s)`;
 }
 
+function setFabricWorkspaceSummary(context) {
+  const el = document.getElementById('fabric-workspace-summary');
+  if (!el) {
+    return;
+  }
+
+  const ws = context.fabric_workspace || {};
+  if (!ws.configured) {
+    el.textContent = 'No Fabric workspace configured yet. Click Ensure Fabric Workspace to create one now and reuse it on future runs.';
+    return;
+  }
+
+  el.textContent = `Workspace ${ws.workspace_name} (${ws.workspace_id}) | Status: ${ws.status || 'REUSED'}`;
+}
+
 function setStatus(message, payload) {
   const el = document.getElementById('status');
   const body = payload ? `\n\n${JSON.stringify(payload, null, 2)}` : '';
@@ -122,6 +145,11 @@ function getSelection() {
 }
 
 async function runStep(stepId) {
+  if (!fabricWorkspaceConfigured()) {
+    setStatus('Ensure Fabric workspace first, then run guided steps.');
+    return;
+  }
+
   const selection = getSelection();
   if (!selection.subscription_id) {
     setStatus('Choose a subscription before running a step.');
@@ -191,6 +219,7 @@ async function refreshContext() {
     populateKeyVaults(context.key_vaults);
     renderSteps(context.steps);
     setContextSummary(context);
+    setFabricWorkspaceSummary(context);
     setStatus('Context loaded. Select your subscription and key vault, then run each step.');
   } catch (error) {
     setStatus(error.message || 'Initialization failed.');
@@ -199,9 +228,33 @@ async function refreshContext() {
   }
 }
 
+async function ensureWorkspace() {
+  setBusy(true);
+  setStatus('Ensuring Fabric workspace (create once, then reuse)...');
+  try {
+    const response = await fetch('/api/fabric/workspace/ensure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus('Could not ensure Fabric workspace.', result);
+      return;
+    }
+
+    setStatus('Fabric workspace ready and persisted for reuse.', result);
+    await refreshContext();
+  } catch (error) {
+    setStatus(error.message || 'Could not ensure Fabric workspace.');
+  } finally {
+    setBusy(false);
+  }
+}
+
 (async function init() {
   try {
     document.getElementById('refresh-context').addEventListener('click', refreshContext);
+    document.getElementById('ensure-workspace').addEventListener('click', ensureWorkspace);
     await refreshContext();
 
     document.getElementById('guided-form').addEventListener('submit', handleSelectionSave);

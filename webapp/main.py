@@ -1,11 +1,14 @@
 import os
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import requests
+from azure.identity import AzureCliCredential, InteractiveBrowserCredential
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -77,6 +80,11 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("WEBAPP_SESSION_SECRE
 app.mount("/static", StaticFiles(directory=ROOT / "webapp" / "static"), name="static")
 templates = Jinja2Templates(directory=str(ROOT / "webapp" / "templates"))
 
+# Keep bearer tokens server-side to avoid oversized cookie sessions.
+TOKEN_STORE: Dict[str, str] = {}
+FABRIC_STATE_PATH = ROOT / "data" / "reports" / "fabric_workspace_state.json"
+FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
+
 class StepRunRequest(BaseModel):
     step_id: str
     subscription_id: str
@@ -104,6 +112,193 @@ def _build_msal_app() -> ConfidentialClientApplication:
     )
 
 
+def _msal_env_configured() -> bool:
+    required = ["WEBAPP_CLIENT_ID", "WEBAPP_CLIENT_SECRET", "AZURE_TENANT_ID"]
+    return all(bool(os.getenv(name)) for name in required)
+
+
+def _slugify_workspace_name(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9-]+", "-", value).strip("-")
+    return slug or "PurviewAuditWorkspace"
+
+
+def _desired_workspace_name(first_run: bool) -> str:
+    base = _slugify_workspace_name(os.getenv("FABRIC_WORKSPACE_NAME", "PurviewAuditWorkspace"))
+    if first_run and not os.getenv("FABRIC_WORKSPACE_ID"):
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        return f"{base}-{stamp}"
+    return base
+
+
+def _read_fabric_state() -> Optional[Dict[str, Any]]:
+    if not FABRIC_STATE_PATH.exists():
+        return None
+    try:
+        return json.loads(FABRIC_STATE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_fabric_state(state: Dict[str, Any]) -> None:
+    FABRIC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FABRIC_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _fabric_token() -> str:
+    tenant_id = os.getenv("AZURE_TENANT_ID") or None
+    scope = "https://api.fabric.microsoft.com/.default"
+
+    try:
+        cli_cred = AzureCliCredential(tenant_id=tenant_id)
+        return cli_cred.get_token(scope).token
+    except Exception as exc:
+        logger.info("Azure CLI Fabric token unavailable: %s", exc)
+
+    try:
+        browser_cred = InteractiveBrowserCredential(tenant_id=tenant_id)
+        return browser_cred.get_token(scope).token
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not acquire Fabric API token. Sign in with Azure CLI or interactive browser first.",
+        ) from exc
+
+
+class _FabricApiClient:
+    def __init__(self, token: str):
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+        )
+
+    def _request(self, method: str, path: str, expected: tuple[int, ...] = (200, 201), **kwargs: Any) -> requests.Response:
+        url = path if path.startswith("http") else f"{FABRIC_API_BASE}{path}"
+        response = self.session.request(method, url, timeout=60, **kwargs)
+        if response.status_code not in expected:
+            detail = response.text.strip()
+            raise HTTPException(status_code=502, detail=f"Fabric API error {response.status_code}: {detail}")
+        return response
+
+    def list_workspaces(self) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        path: Optional[str] = "/workspaces"
+        while path:
+            response = self._request("GET", path, expected=(200,))
+            payload = response.json()
+            items.extend(payload.get("value", []))
+            path = payload.get("continuationUri")
+        return items
+
+    def get_workspace_by_id(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        for ws in self.list_workspaces():
+            if ws.get("id") == workspace_id:
+                return ws
+        return None
+
+    def get_workspace_by_name(self, workspace_name: str) -> Optional[Dict[str, Any]]:
+        for ws in self.list_workspaces():
+            if ws.get("displayName") == workspace_name:
+                return ws
+        return None
+
+    def create_workspace(self, workspace_name: str, description: str, capacity_id: Optional[str] = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "displayName": workspace_name,
+            "description": description,
+        }
+        if capacity_id:
+            payload["capacityId"] = capacity_id
+        response = self._request("POST", "/workspaces", expected=(201,), json=payload)
+        return response.json()
+
+
+def _ensure_fabric_workspace() -> Dict[str, Any]:
+    token = _fabric_token()
+    client = _FabricApiClient(token)
+
+    state = _read_fabric_state()
+    if state and state.get("workspace_id"):
+        existing = client.get_workspace_by_id(state["workspace_id"])
+        if existing:
+            state["workspace_name"] = existing.get("displayName", state.get("workspace_name", ""))
+            state["status"] = "REUSED"
+            state["last_used_utc"] = datetime.now(timezone.utc).isoformat()
+            _write_fabric_state(state)
+            return state
+
+    configured_workspace_id = os.getenv("FABRIC_WORKSPACE_ID", "").strip()
+    if configured_workspace_id:
+        existing = client.get_workspace_by_id(configured_workspace_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Configured FABRIC_WORKSPACE_ID not found: {configured_workspace_id}")
+        state = {
+            "workspace_id": existing.get("id", configured_workspace_id),
+            "workspace_name": existing.get("displayName", _desired_workspace_name(first_run=False)),
+            "status": "ATTACHED",
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "last_used_utc": datetime.now(timezone.utc).isoformat(),
+            "source": "env",
+        }
+        _write_fabric_state(state)
+        return state
+
+    workspace_name = _desired_workspace_name(first_run=state is None)
+    existing = client.get_workspace_by_name(workspace_name)
+    status = "REUSED"
+    if not existing:
+        existing = client.create_workspace(
+            workspace_name,
+            description="Purview governance audit workspace",
+            capacity_id=os.getenv("FABRIC_CAPACITY_ID", "").strip() or None,
+        )
+        status = "CREATED"
+
+    result = {
+        "workspace_id": existing.get("id", ""),
+        "workspace_name": existing.get("displayName", workspace_name),
+        "status": status,
+        "created_utc": (state or {}).get("created_utc") or datetime.now(timezone.utc).isoformat(),
+        "last_used_utc": datetime.now(timezone.utc).isoformat(),
+        "source": "webapp",
+    }
+    _write_fabric_state(result)
+    return result
+
+
+def _fallback_interactive_login(request: Request) -> RedirectResponse:
+    tenant_id = os.getenv("AZURE_TENANT_ID") or None
+    access_token: Optional[str] = None
+
+    try:
+        credential = AzureCliCredential(tenant_id=tenant_id)
+        access_token = credential.get_token("https://management.azure.com/.default").token
+    except Exception as exc:
+        logger.info("Azure CLI auth unavailable, attempting interactive browser credential: %s", exc)
+
+    if not access_token:
+        try:
+            browser_credential = InteractiveBrowserCredential(tenant_id=tenant_id)
+            access_token = browser_credential.get_token("https://management.azure.com/.default").token
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Interactive sign-in is unavailable. Install Azure CLI and run 'az login', or configure WEBAPP_CLIENT_ID/WEBAPP_CLIENT_SECRET."
+                ),
+            ) from exc
+
+    _store_access_token(request, access_token)
+    request.session["user_claims"] = {
+        "tid": tenant_id or "",
+        "name": "Azure CLI Authenticated User",
+        "preferred_username": "azure-cli",
+    }
+    return RedirectResponse("/")
+
+
 def _redirect_uri(request: Request) -> str:
     configured = os.getenv("WEBAPP_REDIRECT_URI")
     if configured:
@@ -111,8 +306,19 @@ def _redirect_uri(request: Request) -> str:
     return str(request.url_for("auth_callback"))
 
 
+def _store_access_token(request: Request, token: str) -> None:
+    token_ref = request.session.get("token_ref") or str(uuid4())
+    request.session["token_ref"] = token_ref
+    TOKEN_STORE[token_ref] = token
+    request.session.pop("access_token", None)
+
+
 def _access_token(request: Request) -> str:
-    token = request.session.get("access_token")
+    token_ref = request.session.get("token_ref")
+    token = TOKEN_STORE.get(token_ref, "") if token_ref else ""
+    if not token:
+        # Backward compatibility for older cookie sessions.
+        token = request.session.get("access_token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated. Sign in first.")
     return token
@@ -211,6 +417,26 @@ def _write_run_plan(payload: Dict[str, Any]) -> None:
         json.dump(payload, handle, indent=2)
 
 
+def _fabric_workspace_context() -> Dict[str, Any]:
+    state = _read_fabric_state()
+    if not state:
+        return {
+            "configured": False,
+            "workspace_id": "",
+            "workspace_name": "",
+            "status": "NOT_CONFIGURED",
+        }
+
+    return {
+        "configured": bool(state.get("workspace_id")),
+        "workspace_id": state.get("workspace_id", ""),
+        "workspace_name": state.get("workspace_name", ""),
+        "status": state.get("status", "REUSED"),
+        "created_utc": state.get("created_utc"),
+        "last_used_utc": state.get("last_used_utc"),
+    }
+
+
 @app.get("/")
 def home(request: Request):
     user_claims = request.session.get("user_claims")
@@ -229,6 +455,9 @@ def home(request: Request):
 
 @app.get("/auth/login")
 def auth_login(request: Request):
+    if not _msal_env_configured():
+        return _fallback_interactive_login(request)
+
     msal_app = _build_msal_app()
     flow = msal_app.initiate_auth_code_flow(
         scopes=AUTH_SCOPES,
@@ -250,13 +479,16 @@ def auth_callback(request: Request):
     if "access_token" not in result:
         raise HTTPException(status_code=401, detail=result.get("error_description", "Sign-in failed."))
 
-    request.session["access_token"] = result["access_token"]
+    _store_access_token(request, result["access_token"])
     request.session["user_claims"] = result.get("id_token_claims", {})
     return RedirectResponse("/")
 
 
 @app.get("/auth/logout")
 def auth_logout(request: Request):
+    token_ref = request.session.get("token_ref")
+    if token_ref:
+        TOKEN_STORE.pop(token_ref, None)
     request.session.clear()
     return RedirectResponse("/")
 
@@ -281,12 +513,20 @@ def api_context(request: Request):
             "subscriptions": subscriptions,
             "key_vaults": key_vaults,
             "steps": steps,
+            "fabric_workspace": _fabric_workspace_context(),
             "summary": {
                 "subscription_count": len(subscriptions),
                 "key_vault_count": len(key_vaults),
             },
         }
     )
+
+
+@app.post("/api/fabric/workspace/ensure")
+def api_ensure_fabric_workspace(request: Request):
+    _access_token(request)
+    state = _ensure_fabric_workspace()
+    return JSONResponse({"fabric_workspace": _fabric_workspace_context(), "result": state})
 
 
 @app.get("/api/steps")
@@ -307,6 +547,10 @@ def api_steps_run(request: Request, payload: StepRunRequest):
     if not payload.key_vault_id or not payload.key_vault_name:
         raise HTTPException(status_code=400, detail="key_vault selection is required.")
 
+    fabric_workspace = _fabric_workspace_context()
+    if not fabric_workspace.get("configured"):
+        raise HTTPException(status_code=400, detail="Fabric workspace is not configured. Run 'Ensure Fabric Workspace' first.")
+
     artifact = _artifact_status(step["artifact"])
     run_plan = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -316,6 +560,7 @@ def api_steps_run(request: Request, payload: StepRunRequest):
             "id": payload.key_vault_id,
             "name": payload.key_vault_name,
         },
+        "fabric_workspace": fabric_workspace,
         "current_step": {
             "id": step["id"],
             "title": step["title"],
@@ -331,7 +576,7 @@ def api_steps_run(request: Request, payload: StepRunRequest):
         {
             "status": status,
             "step": _step_payload(step),
-            "prompt": f"Open and run {step['notebook']} now. After it completes, click Run Step again to refresh status.",
+            "prompt": f"Open and run {step['notebook']} now against Fabric workspace {fabric_workspace.get('workspace_name', '')} ({fabric_workspace.get('workspace_id', '')}). After it completes, click Run Step again to refresh status.",
             "run_plan_path": str(_run_plan_path()),
         }
     )

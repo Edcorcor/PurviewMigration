@@ -37,8 +37,16 @@
         </div>
       </section>
 
-      <section class="card" id="guided-run-card">
-        <h2>Step 2: Select Azure Context</h2>
+      <section class="card" id="fabric-workspace-card">
+        <h2>Step 2: Ensure Fabric Workspace</h2>
+        <p id="fabric-workspace-summary" class="context-summary">Checking Fabric workspace state...</p>
+        <div class="actions-row">
+          <button class="button" type="button" id="ensure-workspace">Ensure Fabric Workspace</button>
+        </div>
+      </section>
+
+      <section class="card" id="azure-context-card">
+        <h2>Step 3: Select Azure Context</h2>
         <p id="context-summary" class="context-summary">Loading Azure context...</p>
         <div class="actions-row">
           <button class="button secondary" type="button" id="refresh-context">Refresh Context</button>
@@ -60,7 +68,7 @@
       </section>
 
       <section class="card" id="steps-card">
-        <h2>Step 3: Run Guided Steps</h2>
+        <h2>Step 4: Run Guided Steps</h2>
         <div id="steps-list" class="steps-list"></div>
       </section>
 
